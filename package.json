@@ -1,0 +1,30 @@
+{
+  "name": "@wannabewayno/assembly-line",
+  "version": "0.0.0",
+  "description": "An Awilix wrapper to automate container registrations",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wannabewayno/assembly-line.git"
+  },
+  "keywords": [
+    "container",
+    "awilix",
+    "automate"
+  ],
+  "author": "wayne",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/wannabewayno/assembly-line/issues"
+  },
+  "homepage": "https://github.com/wannabewayno/assembly-line#readme",
+  "dependencies": {
+    "awilix": "^7.0.3",
+    "dotenv": "^16.0.1",
+    "glob": "^8.0.3",
+    "pluralize": "^8.0.0"
+  }
+}
