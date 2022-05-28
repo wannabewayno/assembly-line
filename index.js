@@ -15,8 +15,6 @@ const { asClass, asValue, asFunction, Lifetime, createContainer } = require('awi
 const { singular, plural } = require('pluralize'); // https://www.npmjs.com/package/pluralize
 const { config } = require('dotenv');
 
-// register 3rd party deps
-
 const mapper = {
     singleton: ['lifetime', Lifetime.SINGLETON],
     transient: ['lifetime', Lifetime.TRANSIENT],
@@ -28,7 +26,7 @@ mapper.si = mapper.singleton;
 mapper.tr = mapper.transient;
 mapper.sc = mapper.scoped;
 
-const values = ['.json'];
+const extensions = new Set(['js','ts', 'json']);
 const DO_NOT_REGISTER = Symbol('DO_NOT_REGISTER');
 
 function parseModule(module) {
@@ -41,15 +39,18 @@ function parseModule(module) {
 
 function parseFileName(fileName) {
     const stats = statSync(fileName);
-    const { name, base, ext } = path.parse(fileName);
+    const { name, base, ext, dir } = path.parse(fileName);
     const pathInfo = name.split('.');
     const isDir = stats.isDirectory();
     let lifetime = this.defaultLifetime;
 
-    // don't register test files or files that don't match the extension whitelist
-    if (!isDir && (!this.extensions.has(ext) || this.isTest.test(base))) lifetime = DO_NOT_REGISTER;
-    
-    const info = { name: pathInfo[0], base, lifetime, isDir, isMock: this.isMock.test(base) };
+    // don't register test files, mock files or files that don't match the extension whitelist
+    if (!isDir && (!extensions.has(ext) || this.isTest.test(base) || this.isMock.test(base) || dir === this.mocksDir)) return { lifetime: DO_NOT_REGISTER };
+
+    const mockName = ext ? `${name}.${this.mockPrefix}.${ext}` : `${name}/index.${this.mockPrefix}.js`;
+    const mockFiles = [path.join(dir, mockName), path.join(this.mocksDir, mockName)];
+
+    const info = { name: pathInfo[0], base, lifetime, isDir, mockFiles };
     const [key, value] = mapper[pathInfo[1]] || [];
     info[key] = value;
 
@@ -62,24 +63,36 @@ function parseFileName(fileName) {
  * @param {String} dirname - The nodejs __dirname should be passed in to initialise. 
  */
  function packUp(dirname, stack = []) {
-    const { isDir, name, lifetime, isMock } = parseFileName.bind(this)(dirname);
-    let Modules = [];
+    const { isDir, name, lifetime, mockFiles } = parseFileName.bind(this)(dirname);
     if (lifetime === DO_NOT_REGISTER) return; // Don't pack up.
+    let Modules = [];
 
     try {
         // we're meant to use a name if... it's parent is a dir that fails requiring.
-        console.log({ stack, name, scopedName: [name, ...stack], singularName: singular([name, ...stack].join('')) });
-        const Module =  require(dirname);
-        console.log("SUCCESSFUL REQUIRE")
+        let Module = require(dirname);
         const scopedName = stack.length !== 1 ? name : singular([name, ...stack].join(''));
+
+        if (this.mocks[`${this.mockPrefix}${scopedName.capitalize()}`]) {
+            // check to see if this is meant to be mocked and require the mock instead
+            try {
+                Module = require(mockFiles[0]); // Mocks are either kept next to the file
+            } catch(error) {
+                try {
+                    Module = require(mockFiles[1]); // Or in the common mocks directory.
+                } catch (err) {
+                    throw new Error(`Mocks Error: Attempted to find ${this.mockPrefix}: ${mockFiles[0]} and when that failed, fell back to looking for ${mockFiles[1]}, but none existed`);
+                }
+            }
+        }
         Modules.push({ Module, type: parseModule(Module), lifetime, name: scopedName });
     } catch (error) {
+        if (/Mocks Error:/.test(error.message)) throw error;
         if (isDir) {
             // basically pack everything in this directory up as a factory function
             const subPaths = readdirSync(dirname);           
             let subModules = subPaths.map(subPath => packUp.bind(this)(path.join(dirname, subPath), [name, ...stack])).filter(v => v).flat(1);
 
-            if (stack.length > 0) {
+            if (stack.length > 0 && subModules.length) {
                 let Module = subModules.reduce((modules, { Module, name }) => Object.assign(modules, { [name]: Module }), {});
                 subModules = [{
                     name: singular([name, ...stack].join('')),
@@ -89,8 +102,7 @@ function parseFileName(fileName) {
                         try {
                             return [name, Module(opts)]
                         } catch(error) {
-                            console.log({ name, Module });
-                            console.log(error);
+                            console.log(error.message, { name, Module });
                         }
                     })),
                 }];
@@ -98,7 +110,6 @@ function parseFileName(fileName) {
             Modules.push(...subModules)
         }
     }
-    console.log({ Modules });
     return Modules.filter(v => v);
 }
 
@@ -137,7 +148,7 @@ module.exports = ({
     extensions = ['js','ts', 'json'],
     mock = 'mock',
     test = 'test',
-    defaultLifetime = Lifetime.SINGLETON,
+    defaultLifetime = 'SINGLETON',
 } = {}) => (mocks = {}) => {
     const start = performance.now();
     env && config({ path: path.resolve(env) }); // Load in environment variables
@@ -158,27 +169,28 @@ module.exports = ({
         const deps = new Set(Object.keys(packageJSON.devDependencies || {}));
         if (deps.size) addModules({ modules: deps, include: includeDevDeps, exclude: excludeDevDeps, rename: renameDevDeps });
     }
-
+    
     if (nodeAPIs.length) addModules({ modules: new Set(nodeAPIs), rename: renameNodeDeps, nodeAPIs: true });
+    
+    const src = path.resolve(srcDir);
 
     const context = {
-        defaultLifetime,
+        defaultLifetime: Lifetime[defaultLifetime],
         extensions: new Set(extensions.map(ext => '.' + ext)),
         isMock: new RegExp(`${mock}\\.(${extensions.join('|')})$`),
         isTest: new RegExp(`${test}\\.(${extensions.join('|')})$`),
+        mockPrefix: mock,
+        mocksDir: path.join(src, plural(mock)),
         mocks,
     }
-
-    readdirSync(path.resolve(srcDir))
-    .flatMap(fileOrDir => packUp.bind(context)(path.join(srcDir, fileOrDir)))
+    readdirSync(src)
+    .flatMap(fileOrDir => packUp.bind(context)(path.join(src, fileOrDir)))
     .reduce((modules, v) => {
         if (!v) return modules;
         const { Module, name, type, lifetime } = v;
         Object.assign(modules, { [name]: type(Module, { lifetime }) });
         return modules;
     }, Modules);
-
-    console.log({ Modules });
 
     container.register(Modules);
     const end = performance.now();
