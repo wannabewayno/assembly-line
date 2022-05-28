@@ -26,7 +26,7 @@ mapper.si = mapper.singleton;
 mapper.tr = mapper.transient;
 mapper.sc = mapper.scoped;
 
-const extensions = new Set(['js','ts', 'json']);
+const extensions = new Set(['.js','.ts', '.json']);
 const DO_NOT_REGISTER = Symbol('DO_NOT_REGISTER');
 
 function parseModule(module) {
@@ -63,7 +63,7 @@ function parseFileName(fileName) {
  * @param {String} dirname - The nodejs __dirname should be passed in to initialise. 
  */
  function packUp(dirname, stack = []) {
-    const { isDir, name, lifetime, mockFiles } = parseFileName.bind(this)(dirname);
+    const { isDir, name, lifetime, mockFiles } = parseFileName.bind(this)(dirname, stack.includes('Prompt'));
     if (lifetime === DO_NOT_REGISTER) return; // Don't pack up.
     let Modules = [];
 
@@ -89,8 +89,8 @@ function parseFileName(fileName) {
         if (/Mocks Error:/.test(error.message)) throw error;
         if (isDir) {
             // basically pack everything in this directory up as a factory function
-            const subPaths = readdirSync(dirname);           
-            let subModules = subPaths.map(subPath => packUp.bind(this)(path.join(dirname, subPath), [name, ...stack])).filter(v => v).flat(1);
+            const subPaths = readdirSync(dirname);       
+            let subModules = subPaths.map(subPath => packUp.bind(this)(path.join(dirname, subPath), [name, ...stack])).filter(v => v).flat(1);  
 
             if (stack.length > 0 && subModules.length) {
                 let Module = subModules.reduce((modules, { Module, name }) => Object.assign(modules, { [name]: Module }), {});
@@ -176,7 +176,6 @@ module.exports = ({
 
     const context = {
         defaultLifetime: Lifetime[defaultLifetime],
-        extensions: new Set(extensions.map(ext => '.' + ext)),
         isMock: new RegExp(`${mock}\\.(${extensions.join('|')})$`),
         isTest: new RegExp(`${test}\\.(${extensions.join('|')})$`),
         mockPrefix: mock,
